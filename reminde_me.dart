@@ -20,8 +20,8 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider<ReminderProvider>(
-      create: (context) => ReminderProvider(),
-      builder: (context, child) {
+      create: (BuildContext context) => ReminderProvider(),
+      builder: (BuildContext context, Widget? child) {
         return MaterialApp(
           title: 'Beautiful Reminders',
           theme: ThemeData(
@@ -37,7 +37,7 @@ class MyApp extends StatelessWidget {
               backgroundColor: Colors.deepPurpleAccent,
               foregroundColor: Colors.white,
             ),
-            cardTheme: CardThemeData( // Corrected from CardTheme to CardThemeData
+            cardTheme: CardThemeData(
               elevation: 5,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(15.0),
@@ -74,6 +74,21 @@ class MyApp extends StatelessWidget {
   }
 }
 
+// --- Reminder Enums ---
+enum ReminderPriority {
+  low,
+  medium,
+  high,
+  critical,
+}
+
+enum ReminderFilter {
+  all,
+  today,
+  next7Days,
+  next30Days,
+}
+
 // --- Reminder Model ---
 class Reminder {
   final String id;
@@ -83,6 +98,8 @@ class Reminder {
   DateTime dateTime;
   bool isCompleted;
   bool isRecurring;
+  ReminderPriority priority; // New field
+  String? imageUrl; // New field
   final DateTime createdAt;
 
   Reminder({
@@ -93,6 +110,8 @@ class Reminder {
     required this.dateTime,
     this.isCompleted = false,
     this.isRecurring = false,
+    this.priority = ReminderPriority.medium, // Default priority
+    this.imageUrl, // Optional image URL
     DateTime? createdAt, // Optional for constructor
   })  : id = id ?? DateTime.now().microsecondsSinceEpoch.toString(),
         createdAt = createdAt ?? DateTime.now();
@@ -106,6 +125,8 @@ class Reminder {
     DateTime? dateTime,
     bool? isCompleted,
     bool? isRecurring,
+    ReminderPriority? priority,
+    String? imageUrl,
     DateTime? createdAt,
   }) {
     return Reminder(
@@ -116,6 +137,8 @@ class Reminder {
       dateTime: dateTime ?? this.dateTime,
       isCompleted: isCompleted ?? this.isCompleted,
       isRecurring: isRecurring ?? this.isRecurring,
+      priority: priority ?? this.priority,
+      imageUrl: imageUrl ?? this.imageUrl,
       createdAt: createdAt ?? this.createdAt,
     );
   }
@@ -123,7 +146,8 @@ class Reminder {
 
 // --- State Management: ReminderProvider using ChangeNotifier ---
 class ReminderProvider extends ChangeNotifier {
-  final List<Reminder> _reminders = [];
+  final List<Reminder> _reminders = <Reminder>[];
+  ReminderFilter _currentFilter = ReminderFilter.all;
 
   // Initialize with some dummy data
   ReminderProvider() {
@@ -135,6 +159,9 @@ class ReminderProvider extends ChangeNotifier {
         dateTime: DateTime.now().add(const Duration(days: 1, hours: 10)),
         isCompleted: false,
         isRecurring: false,
+        priority: ReminderPriority.high,
+        imageUrl:
+            'https://www.gstatic.com/flutter-onestack-prototype/genui/example_1.jpg',
       ),
     );
     _reminders.add(
@@ -142,9 +169,10 @@ class ReminderProvider extends ChangeNotifier {
         userId: _mockUserId,
         title: 'Meeting with John',
         description: 'Discuss Q3 strategy',
-        dateTime: DateTime.now().add(const Duration(days: 2, hours: 14)),
+        dateTime: DateTime.now().add(const Duration(hours: 2)),
         isCompleted: false,
         isRecurring: false,
+        priority: ReminderPriority.critical,
       ),
     );
     _reminders.add(
@@ -155,6 +183,7 @@ class ReminderProvider extends ChangeNotifier {
         dateTime: DateTime.now().subtract(const Duration(days: 3, hours: 5)),
         isCompleted: false,
         isRecurring: false,
+        priority: ReminderPriority.high,
       ),
     );
     _reminders.add(
@@ -165,19 +194,94 @@ class ReminderProvider extends ChangeNotifier {
         dateTime: DateTime.now().subtract(const Duration(days: 10, hours: 1)),
         isCompleted: true,
         isRecurring: false,
+        priority: ReminderPriority.medium,
+      ),
+    );
+    _reminders.add(
+      Reminder(
+        userId: _mockUserId,
+        title: 'Call Insurance Company',
+        description: 'Regarding car accident claim',
+        dateTime: DateTime.now().add(const Duration(days: 15)),
+        isCompleted: false,
+        isRecurring: false,
+        priority: ReminderPriority.low,
+      ),
+    );
+    _reminders.add(
+      Reminder(
+        userId: _mockUserId,
+        title: 'Plan Birthday Party',
+        description: 'Decorations, cake, guest list',
+        dateTime: DateTime.now().add(const Duration(days: 25, hours: 18)),
+        isCompleted: false,
+        isRecurring: false,
+        priority: ReminderPriority.medium,
       ),
     );
     _sortReminders();
   }
 
-  // Getter for reminders, sorted by date/time
+  // Getter for current filter
+  ReminderFilter get currentFilter => _currentFilter;
+
+  // Setter for current filter
+  setFilter(ReminderFilter filter) {
+    if (_currentFilter != filter) {
+      _currentFilter = filter;
+      notifyListeners();
+    }
+  }
+
+  // Getter for reminders, sorted and filtered
   List<Reminder> get reminders {
-    _sortReminders();
-    return List.unmodifiable(_reminders);
+    _sortReminders(); // Always sort first
+    return List<Reminder>.unmodifiable(_filterReminders(_reminders));
+  }
+
+  List<Reminder> _filterReminders(List<Reminder> allReminders) {
+    final DateTime now = DateTime.now();
+    final DateTime today = DateTime(now.year, now.month, now.day);
+
+    switch (_currentFilter) {
+      case ReminderFilter.all:
+        return allReminders;
+      case ReminderFilter.today:
+        return allReminders
+            .where((Reminder r) =>
+                r.dateTime.year == today.year &&
+                r.dateTime.month == today.month &&
+                r.dateTime.day == today.day &&
+                !r.isCompleted) // Don't show completed "today" reminders
+            .toList();
+      case ReminderFilter.next7Days:
+        final DateTime sevenDaysFromNow = today.add(const Duration(days: 7));
+        return allReminders
+            .where((Reminder r) =>
+                r.dateTime.isAfter(now) &&
+                r.dateTime.isBefore(sevenDaysFromNow) &&
+                !r.isCompleted)
+            .toList();
+      case ReminderFilter.next30Days:
+        final DateTime thirtyDaysFromNow = today.add(const Duration(days: 30));
+        return allReminders
+            .where((Reminder r) =>
+                r.dateTime.isAfter(now) &&
+                r.dateTime.isBefore(thirtyDaysFromNow) &&
+                !r.isCompleted)
+            .toList();
+    }
   }
 
   void _sortReminders() {
-    _reminders.sort((a, b) => a.dateTime.compareTo(b.dateTime));
+    _reminders.sort((Reminder a, Reminder b) {
+      // Prioritize uncompleted tasks
+      if (a.isCompleted && !b.isCompleted) return 1;
+      if (!a.isCompleted && b.isCompleted) return -1;
+
+      // Then by date/time
+      return a.dateTime.compareTo(b.dateTime);
+    });
   }
 
   void addReminder(Reminder reminder) {
@@ -186,7 +290,8 @@ class ReminderProvider extends ChangeNotifier {
   }
 
   void updateReminder(Reminder updatedReminder) {
-    final int index = _reminders.indexWhere((Reminder r) => r.id == updatedReminder.id);
+    final int index =
+        _reminders.indexWhere((Reminder r) => r.id == updatedReminder.id);
     if (index != -1) {
       _reminders[index] = updatedReminder;
       notifyListeners();
@@ -214,11 +319,13 @@ class AIService {
     // If the API key is the default placeholder, log an error and return.
     if (_apiKey == 'YOUR_GEMINI_API_KEY_HERE' || _apiKey.isEmpty) {
       // ignore: avoid_print
-      print('AI Service: API key is missing or is a placeholder. AI parsing will not work.');
+      print(
+          'AI Service: API key is missing or is a placeholder. AI parsing will not work.');
       return <String, dynamic>{'error': 'AI API key is not configured.'};
     }
 
-    const String apiUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+    const String apiUrl =
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
     final List<Map<String, dynamic>> chatHistory = <Map<String, dynamic>>[
       <String, dynamic>{
@@ -226,7 +333,7 @@ class AIService {
         "parts": <Map<String, String>>[
           <String, String>{
             "text":
-                "Extract the title, description, date (YYYY-MM-DD), time (HH:MM), and if it's recurring (true/false) from the following text. If a field is not present, use null. For date, infer the closest future date if only day/month is provided. For time, infer a reasonable time if not provided (e.g., 09:00). For recurring, assume false if not explicitly stated. Respond in JSON format according to the schema provided."
+                "Extract the title, description, date (YYYY-MM-DD), time (HH:MM), and if it's recurring (true/false), and priority (low, medium, high, critical) from the following text. If a field is not present, use null. For date, infer the closest future date if only day/month is provided. For time, infer a reasonable time if not provided (e.g., 09:00). For recurring, assume false if not explicitly stated. For priority, assume 'medium' if not stated. Respond in JSON format according to the schema provided."
           }
         ]
       },
@@ -255,9 +362,13 @@ class AIService {
             "description": <String, dynamic>{"type": "STRING", "nullable": true},
             "date": <String, String>{"type": "STRING", "format": "date"}, // YYYY-MM-DD
             "time": <String, String>{"type": "STRING", "format": "time"}, // HH:MM
-            "isRecurring": <String, String>{"type": "BOOLEAN"}
+            "isRecurring": <String, String>{"type": "BOOLEAN"},
+            "priority": <String, dynamic>{
+              "type": "STRING",
+              "enum": <String>["low", "medium", "high", "critical"]
+            }
           },
-          "required": <String>["title", "date", "time", "isRecurring"]
+          "required": <String>["title", "date", "time", "isRecurring", "priority"]
         }
       }
     };
@@ -290,13 +401,174 @@ class AIService {
         // ignore: avoid_print
         print(
             'AI Service: API call failed with status: ${response.statusCode}, body: ${response.body}');
-        return <String, dynamic>{'error': 'API call failed: ${response.statusCode}'};
+        return <String, dynamic>{
+          'error': 'API call failed: ${response.statusCode}'
+        };
       }
     } catch (e) {
       // ignore: avoid_print
       print('AI Service: Error making API call: $e');
       return <String, dynamic>{'error': 'Network or parsing error: $e'};
     }
+  }
+}
+
+// --- Custom Widgets ---
+class ReminderCard extends StatelessWidget {
+  final String title;
+  final String? description;
+  final DateTime dateTime;
+  final bool isCompleted;
+  final ReminderPriority priority;
+  final String? imageUrl;
+  final Color accentColor;
+
+  const ReminderCard({
+    Key? key,
+    required this.title,
+    this.description,
+    required this.dateTime,
+    required this.isCompleted,
+    required this.priority,
+    this.imageUrl,
+    required this.accentColor,
+  }) : super(key: key);
+
+  IconData _getPriorityIcon(ReminderPriority priority) {
+    switch (priority) {
+      case ReminderPriority.low:
+        return Icons.flag;
+      case ReminderPriority.medium:
+        return Icons.flag;
+      case ReminderPriority.high:
+        return Icons.warning_amber_rounded;
+      case ReminderPriority.critical:
+        return Icons.crisis_alert;
+    }
+  }
+
+  Color _getPriorityColor(ReminderPriority priority) {
+    switch (priority) {
+      case ReminderPriority.low:
+        return Colors.blue.shade300;
+      case ReminderPriority.medium:
+        return Colors.orange.shade300;
+      case ReminderPriority.high:
+        return Colors.red.shade400;
+      case ReminderPriority.critical:
+        return Colors.red.shade700;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8.0),
+      elevation: 4,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(15.0),
+        side: BorderSide(
+            color: isCompleted ? Colors.green.shade400 : accentColor,
+            width: 2), // Dynamic border accent
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Icon(
+                  _getPriorityIcon(priority),
+                  color: _getPriorityColor(priority),
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      decoration: isCompleted
+                          ? TextDecoration.lineThrough
+                          : TextDecoration.none,
+                      color: isCompleted ? Colors.grey : Colors.deepPurple,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  isCompleted
+                      ? Icons.check_circle
+                      : Icons.radio_button_unchecked,
+                  color: isCompleted ? Colors.green : Colors.grey,
+                  size: 24,
+                ),
+              ],
+            ),
+            if (description != null && description!.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 8),
+              Text(
+                description!,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: isCompleted ? Colors.grey.shade600 : Colors.grey.shade800,
+                  decoration: isCompleted
+                      ? TextDecoration.lineThrough
+                      : TextDecoration.none,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              children: <Widget>[
+                Icon(Icons.calendar_today,
+                    size: 16, color: Colors.grey.shade600),
+                const SizedBox(width: 6),
+                Text(
+                  DateFormat('EEE, MMM d, yyyy').format(dateTime),
+                  style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                ),
+                const SizedBox(width: 12),
+                Icon(Icons.access_time, size: 16, color: Colors.grey.shade600),
+                const SizedBox(width: 6),
+                Text(
+                  DateFormat('h:mm a').format(dateTime),
+                  style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                ),
+              ],
+            ),
+            if (imageUrl != null && imageUrl!.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 12),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8.0),
+                child: Image.network(
+                  imageUrl!,
+                  height: 120,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                  errorBuilder: (BuildContext context, Object error,
+                      StackTrace? stackTrace) {
+                    return Container(
+                      height: 120,
+                      color: Colors.grey.shade200,
+                      child: Center(
+                        child: Icon(Icons.broken_image,
+                            color: Colors.grey.shade400),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -312,6 +584,12 @@ class HomeScreen extends StatelessWidget {
     // Watch for changes in ReminderProvider
     final ReminderProvider reminderProvider = context.watch<ReminderProvider>();
     final List<Reminder> reminders = reminderProvider.reminders;
+    final ReminderFilter currentFilter = reminderProvider.currentFilter;
+
+    // Provide a default TextStyle in case labelSmall is null or causes issues in web.
+    // This ensures a non-null TextStyle is always passed to the Text widget.
+    final TextStyle defaultLabelStyle = Theme.of(context).textTheme.labelSmall ?? 
+                                        const TextStyle(fontSize: 12, color: Colors.black);
 
     return Scaffold(
       appBar: AppBar(
@@ -329,109 +607,166 @@ class HomeScreen extends StatelessWidget {
           // No logout button since there's no auth
         ],
       ),
-      body: reminders.isEmpty
-          ? Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: <Widget>[
-                  Icon(
-                    Icons.check_circle_outline,
-                    size: 80,
-                    color: Colors.grey.shade400,
-                  ),
-                  const SizedBox(height: 20),
-                  Text(
-                    'No reminders yet!',
-                    style: TextStyle(
-                      fontSize: 22,
-                      color: Colors.grey.shade600,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Tap the + button to add one.',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.grey.shade500,
-                    ),
-                  ),
-                ],
+      body: Column(
+        children: <Widget>[
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            child: SegmentedButton<ReminderFilter>(
+              segments: <ButtonSegment<ReminderFilter>>[
+                ButtonSegment<ReminderFilter>(
+                  value: ReminderFilter.all,
+                  label: Text('All',
+                      style: defaultLabelStyle), // Applied fix
+                  icon: const Icon(Icons.list),
+                ),
+                ButtonSegment<ReminderFilter>(
+                  value: ReminderFilter.today,
+                  label: Text('Today',
+                      style: defaultLabelStyle), // Applied fix
+                  icon: const Icon(Icons.today),
+                ),
+                ButtonSegment<ReminderFilter>(
+                  value: ReminderFilter.next7Days,
+                  label: Text('Next 7 Days',
+                      style: defaultLabelStyle), // Applied fix
+                  icon: const Icon(Icons.calendar_view_week),
+                ),
+                ButtonSegment<ReminderFilter>(
+                  value: ReminderFilter.next30Days,
+                  label: Text('Next 30 Days',
+                      style: defaultLabelStyle), // Applied fix
+                  icon: const Icon(Icons.calendar_month),
+                ),
+              ],
+              selected: <ReminderFilter>{currentFilter},
+              onSelectionChanged: (Set<ReminderFilter> newSelection) {
+                if (newSelection.isNotEmpty) {
+                  context
+                      .read<ReminderProvider>()
+                      .setFilter(newSelection.first);
+                }
+              },
+              multiSelectionEnabled: false,
+              emptySelectionAllowed: false,
+              style: SegmentedButton.styleFrom(
+                selectedBackgroundColor: Theme.of(context).primaryColor,
+                selectedForegroundColor: Colors.white,
+                foregroundColor: Theme.of(context).primaryColor,
               ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.all(16.0),
-              itemCount: reminders.length,
-              itemBuilder: (BuildContext context, int index) {
-                final Reminder reminder = reminders[index];
-                return Dismissible(
-                  key: ValueKey<String>(reminder.id), // Unique key for Dismissible
-                  direction: DismissDirection.endToStart,
-                  background: Container(
-                    alignment: Alignment.centerRight,
-                    padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                    decoration: BoxDecoration(
-                      color: Colors.redAccent,
-                      borderRadius: BorderRadius.circular(15.0),
+            ),
+          ),
+          Expanded(
+            child: reminders.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: <Widget>[
+                        Icon(
+                          Icons.check_circle_outline,
+                          size: 80,
+                          color: Colors.grey.shade400,
+                        ),
+                        const SizedBox(height: 20),
+                        Text(
+                          'No reminders for this filter!',
+                          style: TextStyle(
+                            fontSize: 22,
+                            color: Colors.grey.shade600,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Try a different filter or add a new reminder.',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: Colors.grey.shade500,
+                          ),
+                        ),
+                      ],
                     ),
-                    child: const Icon(Icons.delete, color: Colors.white),
-                  ),
-                  confirmDismiss: (DismissDirection direction) async {
-                    return await showDialog<bool>(
-                          context: context,
-                          builder: (BuildContext context) {
-                            return AlertDialog(
-                              title: const Text("Confirm Delete"),
-                              content: const Text(
-                                  "Are you sure you want to delete this reminder?"),
-                              actions: <Widget>[
-                                TextButton(
-                                  onPressed: () =>
-                                      Navigator.of(context).pop(false),
-                                  child: const Text("Cancel"),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.all(16.0),
+                    itemCount: reminders.length,
+                    itemBuilder: (BuildContext context, int index) {
+                      final Reminder reminder = reminders[index];
+                      return Dismissible(
+                        key: ValueKey<String>(
+                            reminder.id), // Unique key for Dismissible
+                        direction: DismissDirection.endToStart,
+                        background: Container(
+                          alignment: Alignment.centerRight,
+                          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                          decoration: BoxDecoration(
+                            color: Colors.redAccent,
+                            borderRadius: BorderRadius.circular(15.0),
+                          ),
+                          child: const Icon(Icons.delete, color: Colors.white),
+                        ),
+                        confirmDismiss: (DismissDirection direction) async {
+                          return await showDialog<bool>(
+                                context: context,
+                                builder: (BuildContext context) {
+                                  return AlertDialog(
+                                    title: const Text("Confirm Delete"),
+                                    content: const Text(
+                                        "Are you sure you want to delete this reminder?"),
+                                    actions: <Widget>[
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.of(context).pop(false),
+                                        child: const Text("Cancel"),
+                                      ),
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.of(context).pop(true),
+                                        child: const Text("Delete"),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              ) ??
+                              false; // Return false if dialog is dismissed without selection
+                        },
+                        onDismissed: (DismissDirection direction) {
+                          context
+                              .read<ReminderProvider>()
+                              .deleteReminder(reminder.id);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('${reminder.title} dismissed')),
+                          );
+                        },
+                        child: GestureDetector(
+                          onTap: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (BuildContext context) =>
+                                    AddEditReminderScreen(
+                                  userId: userId,
+                                  reminder:
+                                      reminder, // Pass existing reminder for editing
                                 ),
-                                TextButton(
-                                  onPressed: () =>
-                                      Navigator.of(context).pop(true),
-                                  child: const Text("Delete"),
-                                ),
-                              ],
+                              ),
                             );
                           },
-                        ) ??
-                        false; // Return false if dialog is dismissed without selection
-                  },
-                  onDismissed: (DismissDirection direction) {
-                    context.read<ReminderProvider>().deleteReminder(reminder.id);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('${reminder.title} dismissed')),
-                    );
-                  },
-                  child: GestureDetector(
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (BuildContext context) =>
-                              AddEditReminderScreen(
-                            userId: userId,
-                            reminder:
-                                reminder, // Pass existing reminder for editing
+                          child: ReminderCard(
+                            title: reminder.title,
+                            description: reminder.description,
+                            dateTime: reminder.dateTime,
+                            isCompleted: reminder.isCompleted,
+                            priority: reminder.priority,
+                            imageUrl: reminder.imageUrl,
+                            accentColor: _getReminderColor(
+                                reminder.dateTime, reminder.isCompleted),
                           ),
                         ),
                       );
                     },
-                    child: ReminderCard(
-                      title: reminder.title,
-                      description: reminder.description,
-                      dateTime: reminder.dateTime,
-                      isCompleted: reminder.isCompleted,
-                      accentColor:
-                          _getReminderColor(reminder.dateTime, reminder.isCompleted),
-                    ),
                   ),
-                );
-              },
-            ),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: () {
           Navigator.of(context).push(
@@ -485,9 +820,11 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
   late TextEditingController _titleController;
   late TextEditingController _descriptionController;
   late TextEditingController _aiInputController; // For AI text input
+  late TextEditingController _imageUrlController; // For image URL input
   late DateTime _selectedDateTime;
   late bool _isCompleted;
   late bool _isRecurring;
+  late ReminderPriority _selectedPriority; // New state variable for priority
   bool _isParsingAI = false; // To show loading for AI
 
   @override
@@ -496,6 +833,7 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
     _titleController = TextEditingController();
     _descriptionController = TextEditingController();
     _aiInputController = TextEditingController();
+    _imageUrlController = TextEditingController();
 
     if (widget.reminder != null) {
       // Editing an existing reminder
@@ -504,6 +842,8 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
       _selectedDateTime = widget.reminder!.dateTime;
       _isCompleted = widget.reminder!.isCompleted;
       _isRecurring = widget.reminder!.isRecurring;
+      _selectedPriority = widget.reminder!.priority;
+      _imageUrlController.text = widget.reminder!.imageUrl ?? '';
     } else {
       // Adding a new reminder, set default time to next hour
       _selectedDateTime = DateTime.now().add(const Duration(hours: 1));
@@ -516,6 +856,7 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
       );
       _isCompleted = false;
       _isRecurring = false;
+      _selectedPriority = ReminderPriority.medium; // Default for new
     }
   }
 
@@ -524,6 +865,7 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
     _titleController.dispose();
     _descriptionController.dispose();
     _aiInputController.dispose();
+    _imageUrlController.dispose();
     super.dispose();
   }
 
@@ -592,6 +934,12 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
         _titleController.text = parsedData['title'] as String? ?? _titleController.text;
         _descriptionController.text = parsedData['description'] as String? ?? _descriptionController.text;
         _isRecurring = parsedData['isRecurring'] as bool? ?? false;
+        _selectedPriority = ReminderPriority.values.firstWhere(
+          (ReminderPriority e) =>
+              e.toString().split('.').last ==
+              (parsedData['priority'] as String).toLowerCase(),
+          orElse: () => ReminderPriority.medium,
+        );
 
         // Parse date and time
         try {
@@ -645,7 +993,10 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
         dateTime: _selectedDateTime,
         isCompleted: _isCompleted,
         isRecurring: _isRecurring,
-        createdAt: widget.reminder?.createdAt, // Keep original creation date if editing
+        priority: _selectedPriority,
+        imageUrl: _imageUrlController.text.isEmpty ? null : _imageUrlController.text,
+        createdAt:
+            widget.reminder?.createdAt, // Keep original creation date if editing
       );
 
       if (widget.reminder == null) {
@@ -715,24 +1066,29 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
               ),
               const SizedBox(height: 10),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Expanded(
                     child: TextField(
                       controller: _aiInputController,
                       decoration: const InputDecoration(
                         labelText: 'Describe your reminder',
-                        hintText: 'e.g., "Meeting tomorrow at 10 AM with John"',
+                        hintText: 'e.g., "Meeting tomorrow at 10 AM with John, high priority"',
                         prefixIcon: Icon(Icons.smart_toy),
                       ),
+                      maxLines: 3,
                     ),
                   ),
                   const SizedBox(width: 10),
-                  _isParsingAI
-                      ? const CircularProgressIndicator()
-                      : ElevatedButton(
-                          onPressed: _parseWithAI,
-                          child: const Text('Parse with AI'),
-                        ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8.0), // Align button
+                    child: _isParsingAI
+                        ? const CircularProgressIndicator()
+                        : ElevatedButton(
+                            onPressed: _parseWithAI,
+                            child: const Text('Parse with AI'),
+                          ),
+                  ),
                 ],
               ),
               const SizedBox(height: 30),
@@ -748,13 +1104,13 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
                           prefixIcon: Icon(Icons.calendar_today),
                         ),
                         child: Text(
-                          DateFormat('yyyy-MM-dd').format(_selectedDateTime),
+                          DateFormat('MMM d, yyyy').format(_selectedDateTime),
                           style: const TextStyle(fontSize: 16),
                         ),
                       ),
                     ),
                   ),
-                  const SizedBox(width: 15),
+                  const SizedBox(width: 16),
                   Expanded(
                     child: GestureDetector(
                       onTap: () => _selectTime(context),
@@ -764,7 +1120,7 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
                           prefixIcon: Icon(Icons.access_time),
                         ),
                         child: Text(
-                          DateFormat('HH:mm').format(_selectedDateTime),
+                          DateFormat('h:mm a').format(_selectedDateTime),
                           style: const TextStyle(fontSize: 16),
                         ),
                       ),
@@ -773,35 +1129,89 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
                 ],
               ),
               const SizedBox(height: 20),
-              // Switches for Completion and Recurring
+              // Priority Dropdown
+              InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'Priority',
+                  prefixIcon: Icon(Icons.flag),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<ReminderPriority>(
+                    value: _selectedPriority,
+                    isExpanded: true,
+                    onChanged: (ReminderPriority? newValue) {
+                      if (newValue != null) {
+                        setState(() {
+                          _selectedPriority = newValue;
+                        });
+                      }
+                    },
+                    items: ReminderPriority.values
+                        .map<DropdownMenuItem<ReminderPriority>>(
+                            (ReminderPriority priority) {
+                      return DropdownMenuItem<ReminderPriority>(
+                        value: priority,
+                        child: Row(
+                          children: <Widget>[
+                            Icon(
+                              _getPriorityIcon(priority),
+                              color: _getPriorityColor(priority),
+                            ),
+                            const SizedBox(width: 10),
+                            Text(
+                              priority.toString().split('.').last.toUpperCase(),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              // Image URL input
+              TextFormField(
+                controller: _imageUrlController,
+                decoration: const InputDecoration(
+                  labelText: 'Image URL (Optional)',
+                  hintText: 'e.g., https://example.com/image.jpg',
+                  prefixIcon: Icon(Icons.image),
+                ),
+                keyboardType: TextInputType.url,
+              ),
+              const SizedBox(height: 20),
+              // Is Completed & Is Recurring Switches
               SwitchListTile(
                 title: const Text('Mark as Completed'),
                 value: _isCompleted,
-                onChanged: (bool value) {
+                onChanged: (bool newValue) {
                   setState(() {
-                    _isCompleted = value;
+                    _isCompleted = newValue;
                   });
                 },
-                secondary: const Icon(Icons.done_all),
-                activeColor: Colors.green,
+                secondary: const Icon(Icons.check_circle_outline),
+                activeColor: Theme.of(context).primaryColor,
+                contentPadding: EdgeInsets.zero,
               ),
               SwitchListTile(
                 title: const Text('Recurring Reminder'),
                 value: _isRecurring,
-                onChanged: (bool value) {
+                onChanged: (bool newValue) {
                   setState(() {
-                    _isRecurring = value;
+                    _isRecurring = newValue;
                   });
                 },
                 secondary: const Icon(Icons.repeat),
                 activeColor: Theme.of(context).primaryColor,
+                contentPadding: EdgeInsets.zero,
               ),
               const SizedBox(height: 30),
               Center(
                 child: ElevatedButton(
                   onPressed: _saveReminder,
-                  child: Text(
-                      widget.reminder == null ? 'Add Reminder' : 'Update Reminder'),
+                  child: Text(widget.reminder == null
+                      ? 'Add Reminder'
+                      : 'Update Reminder'),
                 ),
               ),
             ],
@@ -810,114 +1220,31 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
       ),
     );
   }
-}
 
-// Reminder Card Widget
-class ReminderCard extends StatelessWidget {
-  final String title;
-  final String? description;
-  final DateTime dateTime;
-  final Color accentColor;
-  final bool isCompleted;
+  // Helper methods for priority color and icon (duplicated from ReminderCard for consistency)
+  IconData _getPriorityIcon(ReminderPriority priority) {
+    switch (priority) {
+      case ReminderPriority.low:
+        return Icons.flag;
+      case ReminderPriority.medium:
+        return Icons.flag;
+      case ReminderPriority.high:
+        return Icons.warning_amber_rounded;
+      case ReminderPriority.critical:
+        return Icons.crisis_alert;
+    }
+  }
 
-  const ReminderCard({
-    Key? key,
-    required this.title,
-    this.description,
-    required this.dateTime,
-    this.accentColor = Colors.blue,
-    this.isCompleted = false,
-  }) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      elevation: 4,
-      margin: const EdgeInsets.symmetric(vertical: 8.0),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(15.0),
-      ),
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(15.0),
-          gradient: LinearGradient(
-            colors: isCompleted
-                ? <Color>[Colors.grey.shade300, Colors.grey.shade200]
-                : <Color>[accentColor.withOpacity(0.9), accentColor.withOpacity(0.7)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          boxShadow: isCompleted
-              ? <BoxShadow>[]
-              : <BoxShadow>[
-                  BoxShadow(
-                    color: accentColor.withOpacity(0.3),
-                    spreadRadius: 2,
-                    blurRadius: 7,
-                    offset: const Offset(0, 3),
-                  ),
-                ],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Icon(
-                    isCompleted ? Icons.check_circle_outline : Icons.alarm,
-                    color: isCompleted ? Colors.green.shade800 : Colors.white,
-                    size: 28,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: TextStyle(
-                        color: isCompleted ? Colors.black87 : Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        decoration: isCompleted
-                            ? TextDecoration.lineThrough
-                            : TextDecoration.none,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-              if (description != null && description!.isNotEmpty) ...<Widget>[
-                const SizedBox(height: 8),
-                Text(
-                  description!,
-                  style: TextStyle(
-                    color: isCompleted ? Colors.black54 : Colors.white70,
-                    fontSize: 16,
-                    decoration: isCompleted
-                        ? TextDecoration.lineThrough
-                        : TextDecoration.none,
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-              const SizedBox(height: 12),
-              Align(
-                alignment: Alignment.bottomRight,
-                child: Text(
-                  '${DateFormat('MMM dd, yyyy').format(dateTime)} at ${DateFormat('hh:mm a').format(dateTime)}',
-                  style: TextStyle(
-                    color: isCompleted ? Colors.black45 : Colors.white60,
-                    fontSize: 14,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+  Color _getPriorityColor(ReminderPriority priority) {
+    switch (priority) {
+      case ReminderPriority.low:
+        return Colors.blue.shade300;
+      case ReminderPriority.medium:
+        return Colors.orange.shade300;
+      case ReminderPriority.high:
+        return Colors.red.shade400;
+      case ReminderPriority.critical:
+        return Colors.red.shade700;
+    }
   }
 }

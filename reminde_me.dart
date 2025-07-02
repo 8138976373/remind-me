@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'dart:convert'; // For jsonDecode/jsonEncode if AIService were enabled
 import 'package:http/http.dart' as http; // For AIService if enabled
 import 'package:provider/provider.dart';
+import 'dart:async'; // Required for Timer and StreamController
 
 // --- Global Constants (Mocked for environment where Firebase is not allowed) ---
 // These are not truly global but serve as mock data for the user ID.
@@ -15,7 +16,7 @@ void main() {
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({Key? key}) : super(key: key);
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -64,6 +65,11 @@ class MyApp extends StatelessWidget {
                 ),
                 textStyle:
                     const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
+            textButtonTheme: TextButtonThemeData(
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.deepPurple,
               ),
             ),
           ),
@@ -149,9 +155,21 @@ class ReminderProvider extends ChangeNotifier {
   final List<Reminder> _reminders = <Reminder>[];
   ReminderFilter _currentFilter = ReminderFilter.all;
 
-  // Initialize with some dummy data
+  late final StreamController<Reminder> _dueReminderStreamController;
+  Stream<Reminder> get dueRemindersStream => _dueReminderStreamController.stream;
+
+  Timer? _notificationTimer;
+  final Set<String> notifiedReminderIds = <String>{}; // Track notified reminders
+
   ReminderProvider() {
-    _reminders.add(
+    _dueReminderStreamController = StreamController<Reminder>.broadcast();
+    _initializeDummyData();
+    _sortReminders();
+    _startNotificationTimer();
+  }
+
+  void _initializeDummyData() {
+    _reminders.addAll(<Reminder>[
       Reminder(
         userId: _mockUserId,
         title: 'Buy Groceries',
@@ -163,8 +181,6 @@ class ReminderProvider extends ChangeNotifier {
         imageUrl:
             'https://www.gstatic.com/flutter-onestack-prototype/genui/example_1.jpg',
       ),
-    );
-    _reminders.add(
       Reminder(
         userId: _mockUserId,
         title: 'Meeting with John',
@@ -174,8 +190,6 @@ class ReminderProvider extends ChangeNotifier {
         isRecurring: false,
         priority: ReminderPriority.critical,
       ),
-    );
-    _reminders.add(
       Reminder(
         userId: _mockUserId,
         title: 'Pay Bills (Overdue)',
@@ -185,8 +199,6 @@ class ReminderProvider extends ChangeNotifier {
         isRecurring: false,
         priority: ReminderPriority.high,
       ),
-    );
-    _reminders.add(
       Reminder(
         userId: _mockUserId,
         title: 'Submit Expense Report',
@@ -196,8 +208,6 @@ class ReminderProvider extends ChangeNotifier {
         isRecurring: false,
         priority: ReminderPriority.medium,
       ),
-    );
-    _reminders.add(
       Reminder(
         userId: _mockUserId,
         title: 'Call Insurance Company',
@@ -207,8 +217,6 @@ class ReminderProvider extends ChangeNotifier {
         isRecurring: false,
         priority: ReminderPriority.low,
       ),
-    );
-    _reminders.add(
       Reminder(
         userId: _mockUserId,
         title: 'Plan Birthday Party',
@@ -218,22 +226,72 @@ class ReminderProvider extends ChangeNotifier {
         isRecurring: false,
         priority: ReminderPriority.medium,
       ),
-    );
-    _sortReminders();
+      // Add dummy reminders for immediate notification testing
+      Reminder(
+        userId: _mockUserId,
+        title: 'Coffee Break Soon!',
+        description: 'Time to grab a cup',
+        dateTime: DateTime.now().add(const Duration(seconds: 30)),
+        isCompleted: false,
+        isRecurring: false,
+        priority: ReminderPriority.low,
+      ),
+      Reminder(
+        userId: _mockUserId,
+        title: 'Daily Standup (Overdue)',
+        description: 'Check in with the team',
+        dateTime: DateTime.now().subtract(const Duration(minutes: 5)),
+        isCompleted: false,
+        isRecurring: false,
+        priority: ReminderPriority.critical,
+      ),
+    ]);
   }
 
-  // Getter for current filter
+  void _startNotificationTimer() {
+    _notificationTimer?.cancel(); // Cancel any existing timer
+    _notificationTimer =
+        Timer.periodic(const Duration(seconds: 30), (Timer timer) {
+      _checkAndNotifyDueReminders();
+    });
+    // Run once immediately on start to catch any already overdue reminders
+    _checkAndNotifyDueReminders();
+  }
+
+  void _checkAndNotifyDueReminders() {
+    final DateTime now = DateTime.now();
+    // Notify for reminders that are up to 1 minute in the future or already past
+    final DateTime futureThreshold = now.add(const Duration(minutes: 1));
+
+    for (final Reminder reminder in _reminders) {
+      if (!reminder.isCompleted &&
+          !notifiedReminderIds.contains(reminder.id) &&
+          (reminder.dateTime.isBefore(now) ||
+              reminder.dateTime.isBefore(futureThreshold))) {
+        if (!_dueReminderStreamController.isClosed) {
+          _dueReminderStreamController.add(reminder);
+          notifiedReminderIds.add(reminder.id);
+        }
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _notificationTimer?.cancel();
+    _dueReminderStreamController.close();
+    super.dispose();
+  }
+
   ReminderFilter get currentFilter => _currentFilter;
 
-  // Setter for current filter
-  setFilter(ReminderFilter filter) {
+  void setFilter(ReminderFilter filter) {
     if (_currentFilter != filter) {
       _currentFilter = filter;
       notifyListeners();
     }
   }
 
-  // Getter for reminders, sorted and filtered
   List<Reminder> get reminders {
     _sortReminders(); // Always sort first
     return List<Reminder>.unmodifiable(_filterReminders(_reminders));
@@ -286,6 +344,7 @@ class ReminderProvider extends ChangeNotifier {
 
   void addReminder(Reminder reminder) {
     _reminders.add(reminder);
+    _checkAndNotifyDueReminders(); // Check immediately for new reminders
     notifyListeners();
   }
 
@@ -294,19 +353,25 @@ class ReminderProvider extends ChangeNotifier {
         _reminders.indexWhere((Reminder r) => r.id == updatedReminder.id);
     if (index != -1) {
       _reminders[index] = updatedReminder;
+      // If completed or scheduled for much later, remove from notified list
+      if (updatedReminder.isCompleted ||
+          updatedReminder.dateTime
+              .isAfter(DateTime.now().add(const Duration(minutes: 5)))) {
+        notifiedReminderIds.remove(updatedReminder.id);
+      }
+      _checkAndNotifyDueReminders(); // Re-check after update
       notifyListeners();
     }
   }
 
   void deleteReminder(String reminderId) {
     _reminders.removeWhere((Reminder r) => r.id == reminderId);
+    notifiedReminderIds.remove(reminderId);
     notifyListeners();
   }
 }
 
 // --- AI Service (Potentially non-functional without a real key) ---
-// Kept for structural completeness if intended to be used with a real key
-// as per environment variable pattern.
 class AIService {
   // This API key is intended to be provided by the Canvas environment.
   // For local testing, replace 'YOUR_GEMINI_API_KEY_HERE' with an actual Gemini API key.
@@ -424,7 +489,7 @@ class ReminderCard extends StatelessWidget {
   final Color accentColor;
 
   const ReminderCard({
-    Key? key,
+    super.key,
     required this.title,
     this.description,
     required this.dateTime,
@@ -432,9 +497,9 @@ class ReminderCard extends StatelessWidget {
     required this.priority,
     this.imageUrl,
     required this.accentColor,
-  }) : super(key: key);
+  });
 
-  IconData _getPriorityIcon(ReminderPriority priority) {
+  static IconData getPriorityIcon(ReminderPriority priority) {
     switch (priority) {
       case ReminderPriority.low:
         return Icons.flag;
@@ -447,7 +512,7 @@ class ReminderCard extends StatelessWidget {
     }
   }
 
-  Color _getPriorityColor(ReminderPriority priority) {
+  static Color getPriorityColor(ReminderPriority priority) {
     switch (priority) {
       case ReminderPriority.low:
         return Colors.blue.shade300;
@@ -479,8 +544,8 @@ class ReminderCard extends StatelessWidget {
             Row(
               children: <Widget>[
                 Icon(
-                  _getPriorityIcon(priority),
-                  color: _getPriorityColor(priority),
+                  ReminderCard.getPriorityIcon(priority),
+                  color: ReminderCard.getPriorityColor(priority),
                   size: 20,
                 ),
                 const SizedBox(width: 8),
@@ -514,7 +579,8 @@ class ReminderCard extends StatelessWidget {
                 description!,
                 style: TextStyle(
                   fontSize: 14,
-                  color: isCompleted ? Colors.grey.shade600 : Colors.grey.shade800,
+                  color:
+                      isCompleted ? Colors.grey.shade600 : Colors.grey.shade800,
                   decoration: isCompleted
                       ? TextDecoration.lineThrough
                       : TextDecoration.none,
@@ -575,21 +641,85 @@ class ReminderCard extends StatelessWidget {
 // --- Screens ---
 
 // Home Screen
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   final String userId;
-  const HomeScreen({Key? key, required this.userId}) : super(key: key);
+  const HomeScreen({super.key, required this.userId});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  StreamSubscription<Reminder>? _reminderNotificationSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _subscribeToReminderNotifications();
+    });
+  }
+
+  void _subscribeToReminderNotifications() {
+    final ReminderProvider reminderProvider = context.read<ReminderProvider>();
+    _reminderNotificationSubscription =
+        reminderProvider.dueRemindersStream.listen((Reminder reminder) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('🔔 Reminder: ${reminder.title} is due!'),
+          action: SnackBarAction(
+            label: 'View',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (BuildContext context) => AddEditReminderScreen(
+                    userId: widget.userId,
+                    reminder: reminder,
+                  ),
+                ),
+              );
+            },
+          ),
+          duration: const Duration(seconds: 10), // Keep longer for notice
+        ),
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _reminderNotificationSubscription?.cancel();
+    super.dispose();
+  }
+
+  Color _getReminderAccentColor(DateTime reminderTime, bool isCompleted) {
+    if (isCompleted) {
+      return Colors.green.shade400; // Completed reminders are green
+    }
+    final DateTime now = DateTime.now();
+    if (reminderTime.isBefore(now)) {
+      return Colors.red.shade400; // Overdue reminders are red
+    }
+    // Upcoming reminders have varying shades of purple/blue
+    final int difference = reminderTime.difference(now).inDays;
+    if (difference <= 1) {
+      return Colors.deepPurpleAccent.shade400; // Within 1 day
+    } else if (difference <= 7) {
+      return Colors.deepPurple.shade300; // Within 1 week
+    } else {
+      return Colors.indigo.shade200; // More than a week away
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    // Watch for changes in ReminderProvider
     final ReminderProvider reminderProvider = context.watch<ReminderProvider>();
     final List<Reminder> reminders = reminderProvider.reminders;
     final ReminderFilter currentFilter = reminderProvider.currentFilter;
 
-    // Provide a default TextStyle in case labelSmall is null or causes issues in web.
-    // This ensures a non-null TextStyle is always passed to the Text widget.
-    final TextStyle defaultLabelStyle = Theme.of(context).textTheme.labelSmall ?? 
-                                        const TextStyle(fontSize: 12, color: Colors.black);
+    final TextStyle defaultLabelStyle = (Theme.of(context).textTheme.labelSmall ??
+            const TextStyle(fontSize: 12, color: Colors.black))
+        as TextStyle;
 
     return Scaffold(
       appBar: AppBar(
@@ -599,42 +729,38 @@ class HomeScreen extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 16.0),
             child: Center(
               child: Text(
-                'User ID: $userId', // Display the mock user ID
+                'User ID: ${widget.userId}', // Display the mock user ID
                 style: const TextStyle(fontSize: 12, color: Colors.white70),
               ),
             ),
           ),
-          // No logout button since there's no auth
         ],
       ),
       body: Column(
         children: <Widget>[
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
             child: SegmentedButton<ReminderFilter>(
               segments: <ButtonSegment<ReminderFilter>>[
                 ButtonSegment<ReminderFilter>(
                   value: ReminderFilter.all,
-                  label: Text('All',
-                      style: defaultLabelStyle), // Applied fix
+                  label: Text('All', style: defaultLabelStyle),
                   icon: const Icon(Icons.list),
                 ),
                 ButtonSegment<ReminderFilter>(
                   value: ReminderFilter.today,
-                  label: Text('Today',
-                      style: defaultLabelStyle), // Applied fix
+                  label: Text('Today', style: defaultLabelStyle),
                   icon: const Icon(Icons.today),
                 ),
                 ButtonSegment<ReminderFilter>(
                   value: ReminderFilter.next7Days,
-                  label: Text('Next 7 Days',
-                      style: defaultLabelStyle), // Applied fix
+                  label: Text('Next 7 Days', style: defaultLabelStyle),
                   icon: const Icon(Icons.calendar_view_week),
                 ),
                 ButtonSegment<ReminderFilter>(
                   value: ReminderFilter.next30Days,
-                  label: Text('Next 30 Days',
-                      style: defaultLabelStyle), // Applied fix
+                  label: Text('Next 30 Days', style: defaultLabelStyle),
                   icon: const Icon(Icons.calendar_month),
                 ),
               ],
@@ -727,14 +853,15 @@ class HomeScreen extends StatelessWidget {
                                   );
                                 },
                               ) ??
-                              false; // Return false if dialog is dismissed without selection
+                              false;
                         },
                         onDismissed: (DismissDirection direction) {
                           context
                               .read<ReminderProvider>()
                               .deleteReminder(reminder.id);
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('${reminder.title} dismissed')),
+                            SnackBar(
+                                content: Text('${reminder.title} dismissed')),
                           );
                         },
                         child: GestureDetector(
@@ -743,7 +870,7 @@ class HomeScreen extends StatelessWidget {
                               MaterialPageRoute<void>(
                                 builder: (BuildContext context) =>
                                     AddEditReminderScreen(
-                                  userId: userId,
+                                  userId: widget.userId,
                                   reminder:
                                       reminder, // Pass existing reminder for editing
                                 ),
@@ -757,7 +884,7 @@ class HomeScreen extends StatelessWidget {
                             isCompleted: reminder.isCompleted,
                             priority: reminder.priority,
                             imageUrl: reminder.imageUrl,
-                            accentColor: _getReminderColor(
+                            accentColor: _getReminderAccentColor(
                                 reminder.dateTime, reminder.isCompleted),
                           ),
                         ),
@@ -772,32 +899,13 @@ class HomeScreen extends StatelessWidget {
           Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (BuildContext context) =>
-                  AddEditReminderScreen(userId: userId),
+                  AddEditReminderScreen(userId: widget.userId),
             ),
           );
         },
         child: const Icon(Icons.add),
       ),
     );
-  }
-
-  Color _getReminderColor(DateTime reminderTime, bool isCompleted) {
-    if (isCompleted) {
-      return Colors.green.shade400; // Completed reminders are green
-    }
-    final DateTime now = DateTime.now();
-    if (reminderTime.isBefore(now)) {
-      return Colors.red.shade400; // Overdue reminders are red
-    }
-    // Upcoming reminders have varying shades of purple/blue
-    final int difference = reminderTime.difference(now).inDays;
-    if (difference <= 1) {
-      return Colors.deepPurpleAccent.shade400; // Within 1 day
-    } else if (difference <= 7) {
-      return Colors.deepPurple.shade300; // Within 1 week
-    } else {
-      return Colors.indigo.shade200; // More than a week away
-    }
   }
 }
 
@@ -806,8 +914,7 @@ class AddEditReminderScreen extends StatefulWidget {
   final String userId;
   final Reminder? reminder; // Null for adding, non-null for editing
 
-  const AddEditReminderScreen({Key? key, required this.userId, this.reminder})
-      : super(key: key);
+  const AddEditReminderScreen({super.key, required this.userId, this.reminder});
 
   @override
   State<AddEditReminderScreen> createState() => _AddEditReminderScreenState();
@@ -931,13 +1038,14 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
       }
 
       setState(() {
-        _titleController.text = parsedData['title'] as String? ?? _titleController.text;
-        _descriptionController.text = parsedData['description'] as String? ?? _descriptionController.text;
-        _isRecurring = parsedData['isRecurring'] as bool? ?? false;
+        _titleController.text =
+            (parsedData['title'] as String?) ?? _titleController.text;
+        _descriptionController.text =
+            (parsedData['description'] as String?) ?? _descriptionController.text;
+        _isRecurring = (parsedData['isRecurring'] as bool?) ?? false;
         _selectedPriority = ReminderPriority.values.firstWhere(
           (ReminderPriority e) =>
-              e.toString().split('.').last ==
-              (parsedData['priority'] as String).toLowerCase(),
+              e.name == (parsedData['priority'] as String).toLowerCase(),
           orElse: () => ReminderPriority.medium,
         );
 
@@ -945,7 +1053,8 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
         try {
           final String dateString = parsedData['date'] as String;
           final String timeString = parsedData['time'] as String;
-          final DateTime parsedDate = DateFormat('yyyy-MM-dd').parse(dateString);
+          final DateTime parsedDate =
+              DateFormat('yyyy-MM-dd').parse(dateString);
           final TimeOfDay parsedTime = TimeOfDay(
             hour: int.parse(timeString.split(':')[0]),
             minute: int.parse(timeString.split(':')[1]),
@@ -1021,8 +1130,8 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title:
-            Text(widget.reminder == null ? 'Add New Reminder' : 'Edit Reminder'),
+        title: Text(
+            widget.reminder == null ? 'Add New Reminder' : 'Edit Reminder'),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
@@ -1073,7 +1182,8 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
                       controller: _aiInputController,
                       decoration: const InputDecoration(
                         labelText: 'Describe your reminder',
-                        hintText: 'e.g., "Meeting tomorrow at 10 AM with John, high priority"',
+                        hintText:
+                            'e.g., "Meeting tomorrow at 10 AM with John, high priority"',
                         prefixIcon: Icon(Icons.smart_toy),
                       ),
                       maxLines: 3,
@@ -1154,12 +1264,12 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
                         child: Row(
                           children: <Widget>[
                             Icon(
-                              _getPriorityIcon(priority),
-                              color: _getPriorityColor(priority),
+                              ReminderCard.getPriorityIcon(priority),
+                              color: ReminderCard.getPriorityColor(priority),
                             ),
                             const SizedBox(width: 10),
                             Text(
-                              priority.toString().split('.').last.toUpperCase(),
+                              priority.name.toUpperCase(),
                             ),
                           ],
                         ),
@@ -1219,32 +1329,5 @@ class _AddEditReminderScreenState extends State<AddEditReminderScreen> {
         ),
       ),
     );
-  }
-
-  // Helper methods for priority color and icon (duplicated from ReminderCard for consistency)
-  IconData _getPriorityIcon(ReminderPriority priority) {
-    switch (priority) {
-      case ReminderPriority.low:
-        return Icons.flag;
-      case ReminderPriority.medium:
-        return Icons.flag;
-      case ReminderPriority.high:
-        return Icons.warning_amber_rounded;
-      case ReminderPriority.critical:
-        return Icons.crisis_alert;
-    }
-  }
-
-  Color _getPriorityColor(ReminderPriority priority) {
-    switch (priority) {
-      case ReminderPriority.low:
-        return Colors.blue.shade300;
-      case ReminderPriority.medium:
-        return Colors.orange.shade300;
-      case ReminderPriority.high:
-        return Colors.red.shade400;
-      case ReminderPriority.critical:
-        return Colors.red.shade700;
-    }
   }
 }
